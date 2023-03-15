@@ -170,15 +170,21 @@ fn extract_signs_from_mca(file_path:PathBuf, version:i32) -> Vec<ChunkLevelTileE
 	// print chunk coordinates using std err to not mess up the output when piping to a file
 	eprintln!("---------- reading chunk: {}, {} ----------", rx, ry);
 
+	// check if file is not empty/corrupted
+	let metadata = std::fs::metadata(file_path.clone()).expect("failed to get metadata");
+	if metadata.len() == 0 {
+		return signs;
+	}
+
 
 	// open file
 	let mut region_file = File::open(file_path).expect("failed to open file");
 
 	// read headers
 	for x in 0..32 {
-		for y in 0..32 {
+		for z in 0..32 {
 			// seek to header
-			let offset = (x + y * 32) * 4;
+			let offset = (x + z * 32) * 4;
 			region_file.seek(std::io::SeekFrom::Start(offset as u64)).expect("failed to seek");
 
 			// read 4 bytes
@@ -226,25 +232,9 @@ fn extract_signs_from_mca(file_path:PathBuf, version:i32) -> Vec<ChunkLevelTileE
 			//let nbt_data: nbt::Blob = nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])).expect("failed to read nbt");
 			//println!("{:#?}", nbt_data);
 			
-			// if version is older then 1.12.2 (id 1343) 
-			if version > 1343 {
-				let nbt_data: Chunk1_13 = match nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
-					Ok(nbt_data) => nbt_data,
-					Err(e) => {
-						// print error and chunk coordinates
-						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
-						continue;
-					}
-				};
-				//println!("{:#?}", nbt_data);
-
-				for block_entity in nbt_data.block_entities {
-					// if block id matches minecraft:\w+_sign
-					if block_entity.id.ends_with("sign") {
-						signs.push(block_entity);
-					}
-				}
-			} else {
+			// if version is before or equal to 1.17.1 (2730) due to 1.18 changing the nbt format of chunks because
+			// of the new height limit
+			if version <= 2730 {
 				let nbt_data: Chunk = match nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
@@ -258,6 +248,24 @@ fn extract_signs_from_mca(file_path:PathBuf, version:i32) -> Vec<ChunkLevelTileE
 					// if tile entity is a sign
 					if tile_entity.id.ends_with("sign") {
 						signs.push(tile_entity);
+					}
+				}
+			} else {
+				let nbt_data: Chunk1_13 = match nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
+					Ok(nbt_data) => nbt_data,
+					Err(e) => {
+						// print error and chunk coordinates
+						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
+						println!("data: {:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
+						continue;
+					}
+				};
+				//println!("{:#?}", nbt_data);
+	
+				for block_entity in nbt_data.block_entities {
+					// if block id matches minecraft:\w+_sign
+					if block_entity.id.ends_with("sign") {
+						signs.push(block_entity);
 					}
 				}
 			}
