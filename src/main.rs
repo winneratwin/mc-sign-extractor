@@ -23,9 +23,11 @@ struct LevelDat {
 #[derive(Debug, Serialize, Deserialize)]
 struct LevelDatData {
 	#[serde(rename = "Version")]
-	version: LevelDatDataVersion
+	version: Option<LevelDatDataVersion>,
+	#[serde(rename = "version")]
+	old_version: i32
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct LevelDatDataVersion {
 	#[serde(rename = "Id")]
 	id: i32,
@@ -95,9 +97,25 @@ fn main() {
 		return;
 	}
 	let version_file = File::open(version_path).expect("failed to open file");
+	//println!("{:#?}",nbt::Blob::from_reader(&mut GzDecoder::new(version_file)).expect("failed to read nbt"));
+	//return;
 	let version_nbt: LevelDat = nbt::from_reader(&mut GzDecoder::new(version_file)).expect("failed to read nbt");
 
-	println!("world_version: {} id: {}", version_nbt.data.version.name, version_nbt.data.version.id);
+	// if Version is None then we are using an old version of minecraft
+	// fallback to old version
+	let version = match version_nbt.data.version {
+		Some(version) => version,
+		None => {
+			LevelDatDataVersion {
+				id: version_nbt.data.old_version,
+				name: "old".to_string(),
+				snapshot: false
+			}
+		}
+	};
+
+	
+	println!("world_version: {} id: {}", version.name, version.id);
 
 
 	// get all files in region folder
@@ -121,11 +139,10 @@ fn main() {
 
 		// clone the sender
 		let thread_tx = tx.clone();
-
+		let thread_version = version.clone();
 		pool.execute(move || {
 			// extract signs from mca file
-			thread_tx.send(extract_signs_from_mca(file_path, version_nbt.data.version.id)).unwrap();
-			drop(thread_tx);
+			thread_tx.send(extract_signs_from_mca(file_path, thread_version)).unwrap();
 		});
 		number_of_files += 1;
 	}
@@ -135,25 +152,102 @@ fn main() {
 	rx.iter().take(number_of_files).for_each(|signs_from_thread| {
 		signs.extend(signs_from_thread);
 	});
-	println!("received all results!");
 
 	// sort signs by x then z
 	signs.sort_by(|a, b| {
 		a.x.cmp(&b.x).then(a.z.cmp(&b.z)).then(a.y.cmp(&b.y))
 	});
 	
+
+	// if version is old then the text is raw but if it is newer then it is json
+	// the json is in the format {"text":"text"} with an optional "extra" field
+	// that contains an array of more json objects
+	
+	#[derive(Debug, Serialize, Deserialize)]
+	struct SignExtra {
+		text: String, // text of the json object
+		color: Option<String>, // color of the text
+		bold: Option<bool>, // if true then the text is bold
+		italic: Option<bool>, // if true then the text is italic
+		underlined: Option<bool>, // if true then the text is underlined
+		strikethrough: Option<bool>, // if true then the text is crossed out
+		obfuscated: Option<bool>, // if true then the text is randomly scrambled every time it is displayed
+	}
+	#[derive(Debug, Serialize, Deserialize)]
+	struct SignText {
+		text: String,
+		extra: Option<Vec<SignExtra>>,
+	}
+
 	for sign in signs {
-		// print xyz and text
-		println!("x: {}, y: {}, z: {}", sign.x, sign.y, sign.z);
-		// we can be sure that text1-4 are not None because we only add signs to the vector
-		println!("text: \n{}\n{}\n{}\n{}", sign.text1.unwrap(), sign.text2.unwrap(), sign.text3.unwrap(), sign.text4.unwrap());
+		// print xyz coordinates
+		println!("---------- location: {},{},{} ----------", sign.x, sign.y, sign.z);
+		// print text all text fields
+		// all text fields exist since we only extract signs
+		if version.name != "old".to_owned() {
+			// convert sign text from json to struct
+			let sign_text_1: SignText = serde_json::from_str(&sign.text1.unwrap()).unwrap();
+			
+			// if extra exists then combine all the text fields
+			if let Some(extra) = sign_text_1.extra {
+				let mut text = sign_text_1.text;
+				for extra in extra {
+					text.push_str(&extra.text);
+				}
+				println!("text: {}", text);
+			} else {
+				println!("text: {}", sign_text_1.text);
+			}
+
+			// repeat for all text fields
+			
+			let sign_text_2: SignText = serde_json::from_str(&sign.text2.unwrap()).unwrap();
+			if let Some(extra) = sign_text_2.extra {
+				let mut text = sign_text_2.text;
+				for extra in extra {
+					text.push_str(&extra.text);
+				}
+				println!("text: {}", text);
+			} else {
+				println!("text: {}", sign_text_2.text);
+			}
+
+			let sign_text_3: SignText = serde_json::from_str(&sign.text3.unwrap()).unwrap();
+			if let Some(extra) = sign_text_3.extra {
+				let mut text = sign_text_3.text;
+				for extra in extra {
+					text.push_str(&extra.text);
+				}
+				println!("text: {}", text);
+			} else {
+				println!("text: {}", sign_text_3.text);
+			}
+
+			let sign_text_4: SignText = serde_json::from_str(&sign.text4.unwrap()).unwrap();
+			if let Some(extra) = sign_text_4.extra {
+				let mut text = sign_text_4.text;
+				for extra in extra {
+					text.push_str(&extra.text);
+				}
+				println!("text: {}", text);
+			} else {
+				println!("text: {}", sign_text_4.text);
+			}
+
+		} else {
+			// if version is old then the text is raw
+			println!("text1: {}", sign.text1.unwrap());
+			println!("text2: {}", sign.text2.unwrap());
+			println!("text3: {}", sign.text3.unwrap());
+			println!("text4: {}", sign.text4.unwrap());
+		}
 	}
 
 
     eprintln!("done!");
 }
 
-fn extract_signs_from_mca(file_path:PathBuf, version:i32) -> Vec<ChunkLevelTileEntities> {
+fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec<ChunkLevelTileEntities> {
 	let mut signs:Vec<ChunkLevelTileEntities> = Vec::new();
 	let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
@@ -228,13 +322,28 @@ fn extract_signs_from_mca(file_path:PathBuf, version:i32) -> Vec<ChunkLevelTileE
 			let mut chunk = vec![0; (length-1) as usize];
 			region_file.read_exact(&mut chunk).expect("failed to read chunk");
 
-			// convert to nbt
-			//let nbt_data: nbt::Blob = nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])).expect("failed to read nbt");
-			//println!("{:#?}", nbt_data);
-			
-			// if version is before or equal to 1.17.1 (2730) due to 1.18 changing the nbt format of chunks because
+			// if version is less or equal to 1.17.1 (2730) due to 1.18 changing the nbt format of chunks because
 			// of the new height limit
-			if version <= 2730 {
+			//println!("{:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
+
+			if version.id > 2730 && version.name != "old".to_owned() {
+				let nbt_data: Chunk1_13 = match nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
+					Ok(nbt_data) => nbt_data,
+					Err(e) => {
+						// print error and chunk coordinates
+						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
+						//println!("data: {:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
+						continue;
+					}
+				};
+	
+				for block_entity in nbt_data.block_entities {
+					// if block entity is a sign
+					if block_entity.id.ends_with("sign") {
+						signs.push(block_entity);
+					}
+				}
+			} else {
 				let nbt_data: Chunk = match nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
@@ -246,26 +355,9 @@ fn extract_signs_from_mca(file_path:PathBuf, version:i32) -> Vec<ChunkLevelTileE
 				// iterate over tile entities
 				for tile_entity in nbt_data.level.tile_entities {
 					// if tile entity is a sign
-					if tile_entity.id.ends_with("sign") {
+					// convert to lowercase because somewhere between 1.12.2 and 1.9.4 the id changed from "minecraft:sign" to "Sign"
+					if tile_entity.id.to_lowercase().ends_with("sign") {
 						signs.push(tile_entity);
-					}
-				}
-			} else {
-				let nbt_data: Chunk1_13 = match nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
-					Ok(nbt_data) => nbt_data,
-					Err(e) => {
-						// print error and chunk coordinates
-						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
-						println!("data: {:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
-						continue;
-					}
-				};
-				//println!("{:#?}", nbt_data);
-	
-				for block_entity in nbt_data.block_entities {
-					// if block id matches minecraft:\w+_sign
-					if block_entity.id.ends_with("sign") {
-						signs.push(block_entity);
 					}
 				}
 			}
