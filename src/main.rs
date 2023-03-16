@@ -98,10 +98,25 @@ struct Item {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Chunk1_13 {
+struct Chunk1_18 {
 	#[serde(rename = "block_entities")]
 	block_entities: Vec<ChunkLevelTileEntities>
 }
+
+// 1.17 remove Entities from chunk and put it in a separate file
+// and also moves TileEntities to Level
+#[derive(Debug, Serialize, Deserialize)]
+struct Chunk1_17 {
+	#[serde(rename = "Level")]
+	level: Chunk1_17Level
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Chunk1_17Level {
+	#[serde(rename = "TileEntities")]
+	block_entities: Vec<ChunkLevelTileEntities>,
+}
+
 
 #[derive(Debug, Serialize, Deserialize)]
 struct SignExtra {
@@ -499,17 +514,16 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 			// comparison to old is needed because the old version has a higher version id
 			// then the new version
 			if version.id > 2730 && version.name != "old".to_owned() { 
-				let nbt_data: Chunk1_13 = match fastnbt::from_bytes(buf.as_slice()) {
+				let nbt_data: Chunk1_18 = match fastnbt::from_bytes(buf.as_slice()) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
 						// print error and chunk coordinates
 						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
-						//println!("data: {:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
 						continue;
 					}
 				};
 
-				println!("nbt_data: {:?}", nbt_data);
+				//println!("nbt_data: {:?}", nbt_data);
 	
 				for block_entity in nbt_data.block_entities {
 					// if block entity is a sign
@@ -521,7 +535,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 					else if block_entity.items.is_some() {
 						// iterate over items
 						for item in block_entity.items.unwrap() {
-							if item.id.to_lowercase().ends_with("written_book") {
+							if item.id.to_lowercase().ends_with("book") && !item.id.to_lowercase().ends_with("enchanted_book") && !item.id.to_lowercase().ends_with(":book") {
 								// convert to BookWithPos and push to vector
 								books.push(BookWithPos {
 									book: item.tag.unwrap(),
@@ -533,7 +547,52 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 						}
 					}
 				}
-			} else {
+			} else if version.id > 2681 && version.name != "old".to_owned() {
+				let nbt_data: Chunk1_17 = match fastnbt::from_bytes(buf.as_slice()) {
+					Ok(nbt_data) => nbt_data,
+					Err(e) => {
+						// print error and chunk coordinates
+						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
+						let val:fastnbt::Value = match fastnbt::from_bytes(buf.as_slice()) {
+							Ok(val) => val,
+							Err(e) => {
+								// print error and chunk coordinates
+								eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
+								//println!("data: {:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
+								continue;
+							}
+						};
+						println!("val: {:#?}", val);
+						continue;
+					}
+				};
+
+				//println!("nbt_data: {:?}", nbt_data);
+	
+				for block_entity in nbt_data.level.block_entities {
+					// if block entity is a sign
+					if block_entity.id.ends_with("sign") {
+						signs.push(block_entity);
+					}
+
+					// check if items are present
+					else if block_entity.items.is_some() {
+						// iterate over items
+						for item in block_entity.items.unwrap() {
+							if item.id.to_lowercase().ends_with("book") && !item.id.to_lowercase().ends_with("enchanted_book") && !item.id.to_lowercase().ends_with(":book") {
+								// convert to BookWithPos and push to vector
+								books.push(BookWithPos {
+									book: item.tag.unwrap(),
+									x: block_entity.x,
+									y: block_entity.y,
+									z: block_entity.z,
+								});
+							}
+						}
+					}
+				}
+			}
+			else {
 				let nbt_data: Chunk = match fastnbt::from_bytes(buf.as_slice()) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
@@ -553,7 +612,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 					else if tile_entity.items.is_some() {
 						// iterate over items
 						for item in tile_entity.items.unwrap() {
-							if item.id.to_lowercase().ends_with("book") && !item.id.to_lowercase().ends_with("enchanted_book") {
+							if item.id.to_lowercase().ends_with("book") && !item.id.to_lowercase().ends_with("enchanted_book") && !item.id.to_lowercase().ends_with(":book") {
 								// check if item has a tag and book has a page
 								if !item.tag.is_some() {
 									continue;
@@ -575,29 +634,26 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 				}
 				// iterate over entities
 				for entity in nbt_data.level.entities {
-					// if entity is a item_frame
-					if entity.id.to_lowercase().ends_with("item_frame") {
-						// check if item is present
-						if entity.item.is_some() {
-							let item = entity.item.unwrap();
-							// check if item is a written book
-							if item.id.to_lowercase().ends_with("book") && !item.id.to_lowercase().ends_with("enchanted_book") {
-								// check if item has a tag and book has a title
-								if !item.tag.is_some() {
-									continue;
-								}
-								let book = item.tag.unwrap();
-								if !book.title.is_some() {
-									continue;
-								}
-								// convert to BookWithPos and push to vector
-								books.push(BookWithPos {
-									book: book,
-									x: entity.pos[0] as i32,
-									y: entity.pos[1] as i32,
-									z: entity.pos[2] as i32,
-								});
+					// check if item is present
+					if entity.item.is_some() {
+						let item = entity.item.unwrap();
+						// check if item is a written book
+						if item.id.to_lowercase().ends_with("book") && !item.id.to_lowercase().ends_with("enchanted_book") {
+							// check if item has a tag and book has a title
+							if !item.tag.is_some() {
+								continue;
 							}
+							let book = item.tag.unwrap();
+							if !book.pages.is_some() {
+								continue;
+							}
+							// convert to BookWithPos and push to vector
+							books.push(BookWithPos {
+								book: book,
+								x: entity.pos[0] as i32,
+								y: entity.pos[1] as i32,
+								z: entity.pos[2] as i32,
+							});
 						}
 					}
 				}
