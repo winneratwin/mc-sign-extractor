@@ -5,8 +5,6 @@ use std::fs::File;
 use std::io::prelude::*;
 use flate2::read::{ZlibDecoder, GzDecoder};
 use serde::{Deserialize, Serialize};
-//use nbt;
-
 
 #[derive(Parser,Debug)]
 #[command(author, version, about, long_about)]
@@ -74,6 +72,22 @@ struct Chunk1_13 {
 	block_entities: Vec<ChunkLevelTileEntities>
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct SignExtra {
+	text: String, // text of the json object
+	color: Option<String>, // color of the text
+	bold: Option<bool>, // if true then the text is bold
+	italic: Option<bool>, // if true then the text is italic
+	underlined: Option<bool>, // if true then the text is underlined
+	strikethrough: Option<bool>, // if true then the text is crossed out
+	obfuscated: Option<bool>, // if true then the text is randomly scrambled every time it is displayed
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct SignText {
+	text: String,
+	extra: Option<Vec<SignExtra>>,
+}
+
 
 fn main() {
 	let opts: Opts = Opts::parse();
@@ -99,7 +113,7 @@ fn main() {
 	let version_file = File::open(version_path).expect("failed to open file");
 	//println!("{:#?}",nbt::Blob::from_reader(&mut GzDecoder::new(version_file)).expect("failed to read nbt"));
 	//return;
-	let version_nbt: LevelDat = nbt::from_reader(&mut GzDecoder::new(version_file)).expect("failed to read nbt");
+	let version_nbt: LevelDat = fastnbt::from_reader(GzDecoder::new(version_file)).expect("failed to read nbt");
 
 	// if Version is None then we are using an old version of minecraft
 	// fallback to old version
@@ -114,7 +128,7 @@ fn main() {
 		}
 	};
 
-	
+	// print version
 	println!("world_version: {} id: {}", version.name, version.id);
 
 
@@ -163,25 +177,11 @@ fn main() {
 	// the json is in the format {"text":"text"} with an optional "extra" field
 	// that contains an array of more json objects
 	
-	#[derive(Debug, Serialize, Deserialize)]
-	struct SignExtra {
-		text: String, // text of the json object
-		color: Option<String>, // color of the text
-		bold: Option<bool>, // if true then the text is bold
-		italic: Option<bool>, // if true then the text is italic
-		underlined: Option<bool>, // if true then the text is underlined
-		strikethrough: Option<bool>, // if true then the text is crossed out
-		obfuscated: Option<bool>, // if true then the text is randomly scrambled every time it is displayed
-	}
-	#[derive(Debug, Serialize, Deserialize)]
-	struct SignText {
-		text: String,
-		extra: Option<Vec<SignExtra>>,
-	}
 
 	for sign in signs {
 		// print xyz coordinates
 		println!("---------- location: {},{},{} ----------", sign.x, sign.y, sign.z);
+
 		// print text all text fields
 		// all text fields exist since we only extract signs
 		if version.name != "old".to_owned() {
@@ -242,8 +242,6 @@ fn main() {
 			println!("text4: {}", sign.text4.unwrap());
 		}
 	}
-
-
     eprintln!("done!");
 }
 
@@ -326,8 +324,10 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec
 			// of the new height limit
 			//println!("{:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
 
-			if version.id > 2730 && version.name != "old".to_owned() {
-				let nbt_data: Chunk1_13 = match nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
+			// comparison to old is needed because the old version has a higher version id
+			// then the new version
+			if version.id > 2730 && version.name != "old".to_owned() { 
+				let nbt_data: Chunk1_13 = match fastnbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
 						// print error and chunk coordinates
@@ -344,7 +344,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec
 					}
 				}
 			} else {
-				let nbt_data: Chunk = match nbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
+				let nbt_data: Chunk = match fastnbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
 						// print error and chunk coordinates
