@@ -13,11 +13,13 @@ struct Opts {
 	#[clap(short, long)]
 	save: String,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct LevelDat {
 	#[serde(rename = "Data")]
 	data:LevelDatData
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct LevelDatData {
 	#[serde(rename = "Version")]
@@ -25,6 +27,7 @@ struct LevelDatData {
 	#[serde(rename = "version")]
 	old_version: i32
 }
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct LevelDatDataVersion {
 	#[serde(rename = "Id")]
@@ -40,11 +43,25 @@ struct Chunk {
 	#[serde(rename = "Level")]
 	level: ChunkLevel
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ChunkLevel {
 	#[serde(rename = "TileEntities")]
-	tile_entities: Vec<ChunkLevelTileEntities>
+	tile_entities: Vec<ChunkLevelTileEntities>,
+	#[serde(rename = "Entities")]
+	entities: Vec<Entity>
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Entity {
+	#[serde(rename = "id")]
+	id: String,
+	#[serde(rename = "Pos")]
+	pos: Vec<f64>,
+	#[serde(rename = "Item")]
+	item: Option<Item>
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ChunkLevelTileEntities {
 	#[serde(rename = "id")]
@@ -64,6 +81,20 @@ struct ChunkLevelTileEntities {
 	text3: Option<String>,
 	#[serde(rename = "Text4")]
 	text4: Option<String>,
+	#[serde(rename = "Items")]
+	items: Option<Vec<Item>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Item {
+	#[serde(rename = "id")]
+	id: String,
+	#[serde(rename = "Slot")]
+	slot: Option<i8>,
+	#[serde(rename = "Count")]
+	count: i8,
+	#[serde(rename = "tag")]
+	tag: Option<Book>
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,11 +113,31 @@ struct SignExtra {
 	strikethrough: Option<bool>, // if true then the text is crossed out
 	obfuscated: Option<bool>, // if true then the text is randomly scrambled every time it is displayed
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct SignText {
 	text: String,
 	extra: Option<Vec<SignExtra>>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Book {
+	#[serde(rename = "pages")]
+	pages: Option<Vec<String>>,
+	#[serde(rename = "title")]
+	title: Option<String>,
+	#[serde(rename = "author")]
+	author: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BookWithPos {
+	book: Book,
+	x: i32,
+	y: i32,
+	z: i32,
+}
+
 
 
 fn main() {
@@ -98,6 +149,8 @@ fn main() {
 		println!("save folder does not exist");
 		return;
 	}
+	let save_name = save_path.file_name().unwrap().to_str().unwrap();
+
 	// check if save folder is a directory
 	if !save_path.is_dir() {
 		println!("save folder is not a directory");
@@ -139,12 +192,15 @@ fn main() {
 
 	// get number of threads
 	let num_threads = num_cpus::get();
+	// switch to 1 thread for testing
+	//let num_threads = 1;
 
 	// create thread pool
 	let pool = threadpool::Builder::new().num_threads(num_threads).build();
 
-	// create a channel to send the results from the threads
+	// create a channel to send the signs from the threads
 	let (tx, rx) = std::sync::mpsc::channel();
+	let (tx_books, rx_books) = std::sync::mpsc::channel();
 
 	let mut number_of_files = 0;
 	for file in region_files {
@@ -153,10 +209,13 @@ fn main() {
 
 		// clone the sender
 		let thread_tx = tx.clone();
+		let thread_tx_books = tx_books.clone();
 		let thread_version = version.clone();
 		pool.execute(move || {
 			// extract signs from mca file
-			thread_tx.send(extract_signs_from_mca(file_path, thread_version)).unwrap();
+			let (signs,books) = extract_signs_from_mca(file_path, thread_version);
+			thread_tx.send(signs).unwrap();
+			thread_tx_books.send(books).unwrap();
 		});
 		number_of_files += 1;
 	}
@@ -172,15 +231,26 @@ fn main() {
 		a.x.cmp(&b.x).then(a.z.cmp(&b.z)).then(a.y.cmp(&b.y))
 	});
 	
+	// collect all the books from the threads
+	let mut books:Vec<BookWithPos> = Vec::new();
+	rx_books.iter().take(number_of_files).for_each(|books_from_thread| {
+		books.extend(books_from_thread);
+	});
+
+	// sort books by x then z
+	books.sort_by(|a, b| {
+		a.x.cmp(&b.x).then(a.z.cmp(&b.z)).then(a.y.cmp(&b.y))
+	});
 
 	// if version is old then the text is raw but if it is newer then it is json
 	// the json is in the format {"text":"text"} with an optional "extra" field
 	// that contains an array of more json objects
 	
+	// write signs to file
+	let mut file = File::create(format!("signs-{save_name}.txt")).unwrap();
 
 	for sign in signs {
-		// print xyz coordinates
-		println!("---------- location: {},{},{} ----------", sign.x, sign.y, sign.z);
+		writeln!(file, "========== sign location: {},{},{} ==========", sign.x, sign.y, sign.z).unwrap();
 
 		// print text all text fields
 		// all text fields exist since we only extract signs
@@ -194,9 +264,9 @@ fn main() {
 				for extra in extra {
 					text.push_str(&extra.text);
 				}
-				println!("text: {}", text);
+				writeln!(file, "text: {}", text).unwrap();
 			} else {
-				println!("text: {}", sign_text_1.text);
+				writeln!(file, "text: {}", sign_text_1.text).unwrap();
 			}
 
 			// repeat for all text fields
@@ -207,9 +277,9 @@ fn main() {
 				for extra in extra {
 					text.push_str(&extra.text);
 				}
-				println!("text: {}", text);
+				writeln!(file, "text: {}", text).unwrap();
 			} else {
-				println!("text: {}", sign_text_2.text);
+				writeln!(file, "text: {}", sign_text_2.text).unwrap();
 			}
 
 			let sign_text_3: SignText = serde_json::from_str(&sign.text3.unwrap()).unwrap();
@@ -218,9 +288,9 @@ fn main() {
 				for extra in extra {
 					text.push_str(&extra.text);
 				}
-				println!("text: {}", text);
+				writeln!(file, "text: {}", text).unwrap();
 			} else {
-				println!("text: {}", sign_text_3.text);
+				writeln!(file, "text: {}", sign_text_3.text).unwrap();
 			}
 
 			let sign_text_4: SignText = serde_json::from_str(&sign.text4.unwrap()).unwrap();
@@ -229,31 +299,120 @@ fn main() {
 				for extra in extra {
 					text.push_str(&extra.text);
 				}
-				println!("text: {}", text);
+				writeln!(file, "text: {}", text).unwrap();
 			} else {
-				println!("text: {}", sign_text_4.text);
+				writeln!(file, "text: {}", sign_text_4.text).unwrap();
 			}
 
 		} else {
 			// if version is old then the text is raw
-			println!("text1: {}", sign.text1.unwrap());
-			println!("text2: {}", sign.text2.unwrap());
-			println!("text3: {}", sign.text3.unwrap());
-			println!("text4: {}", sign.text4.unwrap());
+			writeln!(file, "text: {}", sign.text1.unwrap()).unwrap();
+			writeln!(file, "text: {}", sign.text2.unwrap()).unwrap();
+			writeln!(file, "text: {}", sign.text3.unwrap()).unwrap();
+			writeln!(file, "text: {}", sign.text4.unwrap()).unwrap();
 		}
+		writeln!(file, "").unwrap();
 	}
+
+	// write all books to a file
+	let mut file = File::create(format!("books-{save_name}.txt")).unwrap();
+	
+
+	for book in books {
+		// write xyz coordinates
+		writeln!(file, "=========== book location: {},{},{} ==========", book.x, book.y, book.z).unwrap();
+
+		let book = book.book;
+		// print book title, author and text
+		// check if book has title (writable books don't have titles and author)
+		if let Some(title) = book.title {
+			writeln!(file, "title: {}", title).unwrap();
+		} else {
+			writeln!(file, "title: unknown").unwrap();
+		}
+		// check if book has author
+		if let Some(author) = book.author {
+			writeln!(file, "author: {}", author).unwrap();
+		} else {
+			writeln!(file, "author: unknown").unwrap();
+		}
+		let pages = book.pages.unwrap();
+
+		writeln!(file, "{}", format!("pages: {}", pages.len()) ).unwrap();
+
+		let mut page_number = 1;
+		// iterate over all pages
+		for page in pages {
+			writeln!(file, "---------- page {} ----------", page_number).unwrap();
+			// print page text
+			// replace the following formatting codes with nothing so they don't appear in the text
+			// and the lowercase versions of the formatting codes with nothing so they don't appear in the text
+			/* 
+				§ + k creates randomly changing characters.
+				§ + l creates bold text.
+				§ + m creates strikethrough text.
+				§ + n creates underlined text.
+				§ + o creates italic text.
+				§ + 0 – f (hexadecimal) creates colored text.
+				§ + r resets any of the previous styles so text after it appears normally.
+			*/
+			let page = page.replace("§k", "")
+				.replace("§l", "")
+				.replace("§L", "")
+				.replace("§m", "")
+				.replace("§M", "")
+				.replace("§n", "")
+				.replace("§N", "")
+				.replace("§o", "")
+				.replace("§O", "")
+				.replace("§r", "")
+				.replace("§R", "")
+				.replace("§a", "")
+				.replace("§A", "")
+				.replace("§b", "")
+				.replace("§B", "")
+				.replace("§c", "")
+				.replace("§C", "")
+				.replace("§d", "")
+				.replace("§D", "")
+				.replace("§e", "")
+				.replace("§E", "")
+				.replace("§f", "")
+				.replace("§F", "")
+				.replace("§K", "")
+				.replace("§0", "")
+				.replace("§1", "")
+				.replace("§2", "")
+				.replace("§3", "")
+				.replace("§4", "")
+				.replace("§5", "")
+				.replace("§6", "")
+				.replace("§7", "")
+				.replace("§8", "")
+				.replace("§9", "");
+			
+			// replace § with nothing so it doesn't appear in the text
+			let page = page.replace("§", "");
+			// write page text to file
+			writeln!(file, "{}", page).unwrap();
+			page_number += 1;
+		}
+		writeln!(file, "").unwrap();
+	}	
     eprintln!("done!");
 }
 
-fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec<ChunkLevelTileEntities> {
+fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Vec<ChunkLevelTileEntities>, Vec<BookWithPos>) {
 	let mut signs:Vec<ChunkLevelTileEntities> = Vec::new();
+	let mut books:Vec<BookWithPos> = Vec::new();
+
 	let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
 	// check if file name matches regex
 	let re: Regex = Regex::new(r"r\.(?P<rx>-?\d+)\.(?P<ry>-?\d+)\.mca").expect("invalid regex");
 	let caps = match re.captures(file_name){
 		Some(caps) => caps,
-		None => return signs,
+		None => return (signs,books),
 	};
 
 	// convert to i32
@@ -265,7 +424,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec
 	// check if file is not empty/corrupted
 	let metadata = std::fs::metadata(file_path.clone()).expect("failed to get metadata");
 	if metadata.len() == 0 {
-		return signs;
+		return (signs,books);
 	}
 
 
@@ -301,7 +460,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec
 			let mut length = [0; 4];
 			region_file.read_exact(&mut length).expect("failed to read length");
 
-			// convert to big endian
+			// convert from big endian
 			let length = u32::from_be_bytes(length);
 
 			// get compression type (5th byte)
@@ -320,14 +479,27 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec
 			let mut chunk = vec![0; (length-1) as usize];
 			region_file.read_exact(&mut chunk).expect("failed to read chunk");
 
-			// if version is less or equal to 1.17.1 (2730) due to 1.18 changing the nbt format of chunks because
-			// of the new height limit
-			//println!("{:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
+			let mut buf = vec![];
+			ZlibDecoder::new(&chunk[..]).read_to_end(&mut buf).unwrap();
+			
+			
+			/*
+			let val:Value = match fastnbt::from_bytes(buf.as_slice()) {
+				Ok(val) => val,
+				Err(e) => {
+					// print error and chunk coordinates
+					eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
+					//println!("data: {:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
+					continue;
+				}
+			};
+			println!("val: {:?}", val);
+			continue; */
 
 			// comparison to old is needed because the old version has a higher version id
 			// then the new version
 			if version.id > 2730 && version.name != "old".to_owned() { 
-				let nbt_data: Chunk1_13 = match fastnbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
+				let nbt_data: Chunk1_13 = match fastnbt::from_bytes(buf.as_slice()) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
 						// print error and chunk coordinates
@@ -336,15 +508,33 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec
 						continue;
 					}
 				};
+
+				println!("nbt_data: {:?}", nbt_data);
 	
 				for block_entity in nbt_data.block_entities {
 					// if block entity is a sign
 					if block_entity.id.ends_with("sign") {
 						signs.push(block_entity);
 					}
+
+					// check if items are present
+					else if block_entity.items.is_some() {
+						// iterate over items
+						for item in block_entity.items.unwrap() {
+							if item.id.to_lowercase().ends_with("written_book") {
+								// convert to BookWithPos and push to vector
+								books.push(BookWithPos {
+									book: item.tag.unwrap(),
+									x: block_entity.x,
+									y: block_entity.y,
+									z: block_entity.z,
+								});
+							}
+						}
+					}
 				}
 			} else {
-				let nbt_data: Chunk = match fastnbt::from_reader(&mut ZlibDecoder::new(&chunk[..])) {
+				let nbt_data: Chunk = match fastnbt::from_bytes(buf.as_slice()) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
 						// print error and chunk coordinates
@@ -358,11 +548,61 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> Vec
 					// convert to lowercase because somewhere between 1.12.2 and 1.9.4 the id changed from "minecraft:sign" to "Sign"
 					if tile_entity.id.to_lowercase().ends_with("sign") {
 						signs.push(tile_entity);
+					} 
+					// check if items are present
+					else if tile_entity.items.is_some() {
+						// iterate over items
+						for item in tile_entity.items.unwrap() {
+							if item.id.to_lowercase().ends_with("book") && !item.id.to_lowercase().ends_with("enchanted_book") {
+								// check if item has a tag and book has a page
+								if !item.tag.is_some() {
+									continue;
+								}
+								let book = item.tag.unwrap();
+								if !book.pages.is_some() {
+									continue;
+								}
+								// convert to BookWithPos and push to vector
+								books.push(BookWithPos {
+									book: book,
+									x: tile_entity.x,
+									y: tile_entity.y,
+									z: tile_entity.z,
+								});
+							}
+						}
+					}
+				}
+				// iterate over entities
+				for entity in nbt_data.level.entities {
+					// if entity is a item_frame
+					if entity.id.to_lowercase().ends_with("item_frame") {
+						// check if item is present
+						if entity.item.is_some() {
+							let item = entity.item.unwrap();
+							// check if item is a written book
+							if item.id.to_lowercase().ends_with("book") && !item.id.to_lowercase().ends_with("enchanted_book") {
+								// check if item has a tag and book has a title
+								if !item.tag.is_some() {
+									continue;
+								}
+								let book = item.tag.unwrap();
+								if !book.title.is_some() {
+									continue;
+								}
+								// convert to BookWithPos and push to vector
+								books.push(BookWithPos {
+									book: book,
+									x: entity.pos[0] as i32,
+									y: entity.pos[1] as i32,
+									z: entity.pos[2] as i32,
+								});
+							}
+						}
 					}
 				}
 			}
 		}
 	}
-
-	return signs;
+	return (signs,books);
 }
