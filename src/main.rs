@@ -518,7 +518,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
 						// print error and chunk coordinates
-						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
+						//eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
 						continue;
 					}
 				};
@@ -552,17 +552,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
 						// print error and chunk coordinates
-						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
-						let val:fastnbt::Value = match fastnbt::from_bytes(buf.as_slice()) {
-							Ok(val) => val,
-							Err(e) => {
-								// print error and chunk coordinates
-								eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
-								//println!("data: {:?}", nbt::Blob::from_reader(&mut ZlibDecoder::new(&chunk[..])));
-								continue;
-							}
-						};
-						println!("val: {:#?}", val);
+						//eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
 						continue;
 					}
 				};
@@ -592,12 +582,13 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 					}
 				}
 			}
+			//todo support version upgraded from/on 1.7 and below
 			else {
 				let nbt_data: Chunk = match fastnbt::from_bytes(buf.as_slice()) {
 					Ok(nbt_data) => nbt_data,
 					Err(e) => {
 						// print error and chunk coordinates
-						eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
+						//eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
 						continue;
 					}
 				};
