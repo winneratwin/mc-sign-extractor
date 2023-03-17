@@ -1,10 +1,13 @@
-use clap::Parser;
 use std::path::{Path, PathBuf};
 use regex::Regex;
 use std::fs::File;
 use std::io::prelude::*;
 use flate2::read::{ZlibDecoder, GzDecoder};
-use serde::{Deserialize, Serialize};
+use clap::Parser;
+
+// import types from types.rs
+mod types;
+use crate::types::*;
 
 #[derive(Parser,Debug)]
 #[command(author, version, about, long_about)]
@@ -13,146 +16,6 @@ struct Opts {
 	#[clap(short, long)]
 	save: String,
 }
-
-#[derive(Debug, Serialize, Deserialize)]
-struct LevelDat {
-	#[serde(rename = "Data")]
-	data:LevelDatData
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct LevelDatData {
-	#[serde(rename = "Version")]
-	version: Option<LevelDatDataVersion>,
-	#[serde(rename = "version")]
-	old_version: i32
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct LevelDatDataVersion {
-	#[serde(rename = "Id")]
-	id: i32,
-	#[serde(rename = "Name")]
-	name: String,
-	#[serde(rename = "Snapshot")]
-	snapshot: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Chunk {
-	#[serde(rename = "Level")]
-	level: ChunkLevel
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ChunkLevel {
-	#[serde(rename = "TileEntities")]
-	tile_entities: Vec<ChunkLevelTileEntities>,
-	#[serde(rename = "Entities")]
-	entities: Vec<Entity>
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Entity {
-	#[serde(rename = "id")]
-	id: String,
-	#[serde(rename = "Pos")]
-	pos: Vec<f64>,
-	#[serde(rename = "Item")]
-	item: Option<Item>
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ChunkLevelTileEntities {
-	#[serde(rename = "id")]
-	id: String,
-	#[serde(rename = "x")]
-	x: i32,
-	#[serde(rename = "y")]
-	y: i32,
-	#[serde(rename = "z")]
-	z: i32,
-	// Text1-4 are for signs
-	#[serde(rename = "Text1")]
-	text1: Option<String>,
-	#[serde(rename = "Text2")]
-	text2: Option<String>,
-	#[serde(rename = "Text3")]
-	text3: Option<String>,
-	#[serde(rename = "Text4")]
-	text4: Option<String>,
-	#[serde(rename = "Items")]
-	items: Option<Vec<Item>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Item {
-	#[serde(rename = "id")]
-	id: String,
-	#[serde(rename = "Slot")]
-	slot: Option<i8>,
-	#[serde(rename = "Count")]
-	count: i8,
-	#[serde(rename = "tag")]
-	tag: Option<Book>
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Chunk1_18 {
-	#[serde(rename = "block_entities")]
-	block_entities: Vec<ChunkLevelTileEntities>
-}
-
-// 1.17 remove Entities from chunk and put it in a separate file
-// and also moves TileEntities to Level
-#[derive(Debug, Serialize, Deserialize)]
-struct Chunk1_17 {
-	#[serde(rename = "Level")]
-	level: Chunk1_17Level
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Chunk1_17Level {
-	#[serde(rename = "TileEntities")]
-	block_entities: Vec<ChunkLevelTileEntities>,
-}
-
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SignExtra {
-	text: String, // text of the json object
-	color: Option<String>, // color of the text
-	bold: Option<bool>, // if true then the text is bold
-	italic: Option<bool>, // if true then the text is italic
-	underlined: Option<bool>, // if true then the text is underlined
-	strikethrough: Option<bool>, // if true then the text is crossed out
-	obfuscated: Option<bool>, // if true then the text is randomly scrambled every time it is displayed
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SignText {
-	text: String,
-	extra: Option<Vec<SignExtra>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Book {
-	#[serde(rename = "pages")]
-	pages: Option<Vec<String>>,
-	#[serde(rename = "title")]
-	title: Option<String>,
-	#[serde(rename = "author")]
-	author: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BookWithPos {
-	book: Book,
-	x: i32,
-	y: i32,
-	z: i32,
-}
-
 
 
 fn main() {
@@ -516,7 +379,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 			if version.id > 2730 && version.name != "old".to_owned() { 
 				let nbt_data: Chunk1_18 = match fastnbt::from_bytes(buf.as_slice()) {
 					Ok(nbt_data) => nbt_data,
-					Err(e) => {
+					Err(_e) => {
 						// print error and chunk coordinates
 						//eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
 						continue;
@@ -550,7 +413,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 			} else if version.id > 2681 && version.name != "old".to_owned() {
 				let nbt_data: Chunk1_17 = match fastnbt::from_bytes(buf.as_slice()) {
 					Ok(nbt_data) => nbt_data,
-					Err(e) => {
+					Err(_e) => {
 						// print error and chunk coordinates
 						//eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
 						continue;
@@ -586,7 +449,7 @@ fn extract_signs_from_mca(file_path:PathBuf, version:LevelDatDataVersion) -> (Ve
 			else {
 				let nbt_data: Chunk = match fastnbt::from_bytes(buf.as_slice()) {
 					Ok(nbt_data) => nbt_data,
-					Err(e) => {
+					Err(_e) => {
 						// print error and chunk coordinates
 						//eprintln!("failed to read nbt in chunk: {}, {} with error {}", rx, ry, e);
 						continue;
